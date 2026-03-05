@@ -378,8 +378,11 @@ void RaftNode::handle_client_request(const ClientRequest& req,
         return;
     }
 
+    // Read-only commands: serve directly from leader's state machine
     std::string cmd = req.command();
-    if (cmd.substr(0, 3) == "GET") {
+    bool is_read = (cmd.size() >= 3 && cmd.substr(0, 3) == "GET") ||
+                   (cmd.size() >= 4 && cmd.substr(0, 4) == "LIST");
+    if (is_read) {
         std::string result = state_machine_.apply(cmd);
         resp->set_success(true);
         resp->set_value(result);

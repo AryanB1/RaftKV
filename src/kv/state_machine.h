@@ -3,16 +3,16 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 namespace raftkv {
 
-// Stub — will be fully implemented in Phase 3
 class StateMachine {
 public:
-    // Apply a command string, return result (value for GET, empty for PUT/DELETE)
     std::string apply(const std::string& command);
-
     std::optional<std::string> get(const std::string& key) const;
+    std::vector<std::string> keys() const;
+    size_t size() const { return store_.size(); }
 
 private:
     std::unordered_map<std::string, std::string> store_;

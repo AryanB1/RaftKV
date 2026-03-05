@@ -63,6 +63,7 @@ enable_testing()
 add_executable(raftkv_tests
     tests/network_test.cpp
     tests/raft_test.cpp
+    tests/kv_test.cpp
 )
 target_link_libraries(raftkv_tests PRIVATE raftkv_core GTest::gtest_main)
 add_test(NAME raftkv_tests COMMAND raftkv_tests)
