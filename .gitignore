@@ -1,0 +1,10 @@
+build/
+data/
+*.o
+*.a
+*.so
+*.dylib
+.cache/
+compile_commands.json
+.claude/
+scripts/

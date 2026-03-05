@@ -1,0 +1,76 @@
+syntax = "proto3";
+
+package raftkv;
+
+// Log entry stored in the Raft log
+message LogEntry {
+    uint64 index = 1;
+    uint64 term = 2;
+    string command = 3;  // Serialized KV command, e.g. "PUT key value"
+}
+
+// Leader election RPCs
+message RequestVoteRequest {
+    uint64 term = 1;
+    uint32 candidate_id = 2;
+    uint64 last_log_index = 3;
+    uint64 last_log_term = 4;
+}
+
+message RequestVoteResponse {
+    uint64 term = 1;
+    bool vote_granted = 2;
+}
+
+// Log replication RPCs
+message AppendEntriesRequest {
+    uint64 term = 1;
+    uint32 leader_id = 2;
+    uint64 prev_log_index = 3;
+    uint64 prev_log_term = 4;
+    repeated LogEntry entries = 5;
+    uint64 leader_commit = 6;
+}
+
+message AppendEntriesResponse {
+    uint64 term = 1;
+    bool success = 2;
+    uint64 match_index = 3;  // Optimization: tell leader where we matched
+}
+
+// Client RPCs
+message ClientRequest {
+    string command = 1;       // e.g. "PUT key value", "GET key", "DELETE key"
+    uint64 request_id = 2;   // For deduplication
+}
+
+message ClientResponse {
+    bool success = 1;
+    string value = 2;         // For GET responses
+    string error = 3;         // Error message if !success
+    uint32 leader_hint = 4;   // Redirect to leader if this node isn't leader
+}
+
+// Envelope that wraps all message types for transport
+message RaftMessage {
+    enum Type {
+        REQUEST_VOTE_REQ = 0;
+        REQUEST_VOTE_RESP = 1;
+        APPEND_ENTRIES_REQ = 2;
+        APPEND_ENTRIES_RESP = 3;
+        CLIENT_REQ = 4;
+        CLIENT_RESP = 5;
+    }
+
+    Type type = 1;
+    uint32 sender_id = 2;
+
+    oneof payload {
+        RequestVoteRequest request_vote_req = 10;
+        RequestVoteResponse request_vote_resp = 11;
+        AppendEntriesRequest append_entries_req = 12;
+        AppendEntriesResponse append_entries_resp = 13;
+        ClientRequest client_req = 14;
+        ClientResponse client_resp = 15;
+    }
+}
