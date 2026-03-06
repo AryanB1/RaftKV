@@ -62,6 +62,7 @@ int main(int argc, char* argv[]) {
     config.listen_port = port;
     config.peers = peers;
     config.log_path = "./data/node" + std::to_string(node_id) + "/";
+    config.persist = true;
 
     // Create RaftNode with a send function that uses outbound TCP connections
     auto raft = std::make_shared<raftkv::RaftNode>(config,

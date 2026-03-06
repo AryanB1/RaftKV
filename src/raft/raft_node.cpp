@@ -7,12 +7,32 @@ namespace raftkv {
 RaftNode::RaftNode(const RaftConfig& config, SendFunction send_fn)
     : config_(config),
       send_fn_(std::move(send_fn)),
-      log_(config.log_path),
-      rng_(std::random_device{}()) {}
+      log_(config.log_path, config.persist),
+      metadata_(config.log_path, config.persist),
+      rng_(std::random_device{}()) {
+    // Recover persisted state
+    metadata_.load(current_term_, voted_for_);
+    if (current_term_ > 0 || voted_for_ > 0) {
+        spdlog::info("[node{}] Recovered: term={}, votedFor={}, log_size={}",
+                     id(), current_term_, voted_for_, log_.last_index());
+    }
+}
 
 RaftNode::~RaftNode() { stop(); }
 
 void RaftNode::start() {
+    // Replay committed log entries to rebuild state machine.
+    // On recovery we don't know commit_index yet (it's not persisted),
+    // but all entries in our log were accepted, so we conservatively
+    // apply them all. The Raft leader will correct our commit_index.
+    // This is safe because the state machine is deterministic.
+    if (log_.last_index() > 0 && last_applied_ == 0) {
+        commit_index_ = log_.last_index();
+        apply_committed_entries();
+        spdlog::info("[node{}] Replayed {} log entries to state machine",
+                     id(), last_applied_);
+    }
+
     running_ = true;
     reset_election_timer();
     next_heartbeat_ = std::chrono::steady_clock::now();
@@ -25,7 +45,11 @@ void RaftNode::stop() {
     if (tick_thread_.joinable()) tick_thread_.join();
 }
 
-// --- Single tick loop (replaces separate election + heartbeat threads) ---
+void RaftNode::persist_metadata() {
+    metadata_.save(current_term_, voted_for_);
+}
+
+// --- Single tick loop ---
 
 void RaftNode::tick_loop() {
     while (running_) {
@@ -36,7 +60,6 @@ void RaftNode::tick_loop() {
         std::lock_guard lock(mu_);
 
         if (role_ == NodeRole::LEADER) {
-            // Send heartbeats periodically
             if (now >= next_heartbeat_) {
                 for (auto& peer : config_.peers) {
                     send_append_entries(peer.id);
@@ -44,7 +67,6 @@ void RaftNode::tick_loop() {
                 next_heartbeat_ = now + std::chrono::milliseconds(config_.heartbeat_interval_ms);
             }
         } else {
-            // Check election timeout
             if (now >= election_deadline_) {
                 spdlog::info("[node{}] Election timeout, starting election", id());
                 start_election();
@@ -69,6 +91,7 @@ void RaftNode::start_election() {
     leader_id_ = 0;
     votes_received_.clear();
     votes_received_[id()] = true;
+    persist_metadata();
 
     spdlog::info("[node{}] Became candidate for term {}", id(), current_term_);
 
@@ -100,6 +123,7 @@ void RaftNode::become_follower(uint64_t term) {
     if (term > current_term_) {
         current_term_ = term;
         voted_for_ = 0;
+        persist_metadata();
     }
     role_ = NodeRole::FOLLOWER;
     reset_election_timer();
@@ -119,7 +143,6 @@ void RaftNode::become_leader() {
 
     spdlog::info("[node{}] Became LEADER for term {}", id(), current_term_);
 
-    // Send initial heartbeats immediately
     next_heartbeat_ = std::chrono::steady_clock::now();
     for (auto& peer : config_.peers) {
         send_append_entries(peer.id);
@@ -157,6 +180,7 @@ void RaftNode::handle_request_vote(const RequestVoteRequest& req, uint32_t sende
 
     if (can_vote && log_ok) {
         voted_for_ = req.candidate_id();
+        persist_metadata();
         resp->set_vote_granted(true);
         reset_election_timer();
         spdlog::info("[node{}] Granted vote to {} for term {}", id(), sender, req.term());
@@ -323,20 +347,22 @@ void RaftNode::handle_append_entries_response(const AppendEntriesResponse& resp,
 // --- Commit & Apply ---
 
 void RaftNode::advance_commit_index() {
-    for (uint64_t n = last_log_index(); n > commit_index_; n--) {
-        if (log_term(n) != current_term_) continue;
+    // O(peers log peers) instead of O(log_size * peers):
+    // Sort match indices and pick the median (majority threshold).
+    std::vector<uint64_t> indices;
+    indices.reserve(config_.peers.size() + 1);
+    indices.push_back(last_log_index()); // Leader's own match index
+    for (auto& peer : config_.peers) {
+        indices.push_back(match_index_[peer.id]);
+    }
+    std::sort(indices.begin(), indices.end(), std::greater<>());
 
-        int count = 1;
-        for (auto& peer : config_.peers) {
-            if (match_index_[peer.id] >= n) count++;
-        }
-
-        if (count >= majority_count()) {
-            spdlog::info("[node{}] Advancing commit index {} -> {}", id(), commit_index_, n);
-            commit_index_ = n;
-            apply_committed_entries();
-            return;
-        }
+    // The majority_count()-th largest index is the highest N replicated on a majority
+    uint64_t n = indices[majority_count() - 1];
+    if (n > commit_index_ && log_term(n) == current_term_) {
+        spdlog::info("[node{}] Advancing commit index {} -> {}", id(), commit_index_, n);
+        commit_index_ = n;
+        apply_committed_entries();
     }
 }
 

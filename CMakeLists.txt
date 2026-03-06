@@ -64,6 +64,11 @@ add_executable(raftkv_tests
     tests/network_test.cpp
     tests/raft_test.cpp
     tests/kv_test.cpp
+    tests/persistence_test.cpp
 )
 target_link_libraries(raftkv_tests PRIVATE raftkv_core GTest::gtest_main)
 add_test(NAME raftkv_tests COMMAND raftkv_tests)
+
+# Benchmark executable
+add_executable(raftkv_bench benchmarks/bench_main.cpp)
+target_link_libraries(raftkv_bench PRIVATE raftkv_core)

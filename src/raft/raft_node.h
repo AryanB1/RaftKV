@@ -5,7 +5,6 @@
 #include "storage/log_store.h"
 #include <atomic>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <functional>
 #include <mutex>
@@ -33,6 +32,7 @@ struct RaftConfig {
     uint32_t election_timeout_max_ms = 300;
     uint32_t heartbeat_interval_ms = 50;
     std::string log_path = "./data/";
+    bool persist = false;  // Enable WAL + metadata persistence
 };
 
 using SendFunction = std::function<void(uint32_t peer_id, const RaftMessage& msg)>;
@@ -53,15 +53,16 @@ public:
     uint64_t current_term() const { return current_term_; }
     uint32_t leader_id() const { return leader_id_; }
     uint64_t commit_index() const { return commit_index_; }
+    uint64_t last_applied() const { return last_applied_; }
 
 private:
-    // Single tick loop handles both election timeout and heartbeats
     void tick_loop();
 
     void reset_election_timer();
     void start_election();
     void become_follower(uint64_t term);
     void become_leader();
+    void persist_metadata();
 
     void handle_request_vote(const RequestVoteRequest& req, uint32_t sender,
                              std::function<void(const RaftMessage&)> reply);
@@ -94,6 +95,7 @@ private:
     uint32_t leader_id_ = 0;
 
     LogStore log_;
+    MetadataStore metadata_;
 
     StateMachine state_machine_;
     uint64_t commit_index_ = 0;
